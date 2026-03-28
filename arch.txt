@@ -1,0 +1,34 @@
+Model:     
+	'architecture' ':'  
+		elements*=Element ; 
+Element:     
+	Component | Connector ; 
+Component:     
+	'component' tier=TierType type=ComponentType name=ID ; 
+Connector:
+	'connector' type=ConnectorType 
+	from=[Component] '->' to=[Component] ; 
+TierType:     
+	'presentation' | 
+	'communication' | 
+	'logic' | 
+	'data' | 
+	'physical' ; 
+ComponentType:     
+	'web_interface'   |     
+	'operator_ui'     |     
+	'driver_ui'       |     
+	'api_gateway'     |     
+	'microservice'    |     
+	'authority_service' |     
+	'database'        |     
+	'data_lake'       |     
+	'onboard_unit'    |     
+	'sensor'          |     
+	'actuator'        |     
+	'balise' ; 
+ConnectorType:     
+	'data_flow'         |     
+	'control_command'   |     
+	'event_notification'|     
+	'dependency' ; 
