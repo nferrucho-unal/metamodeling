@@ -9,105 +9,80 @@ on:
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
+    
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+        options: >-
+          --health-cmd="mysqladmin ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=3
+        ports:
+          - 3306:3306
 
     steps:
-      # ─────────────────────────────
-      # 1. Checkout código
-      # ─────────────────────────────
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ─────────────────────────────
-      # 2. Setup Python
-      # ─────────────────────────────
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      # ─────────────────────────────
-      # 3. Instalar dependencias
-      # ─────────────────────────────
       - name: Install dependencies
         run: |
           pip install --no-cache-dir textX mysql-connector-python flask
 
-      # ─────────────────────────────
-      # 4. Generar skeleton
-      # ─────────────────────────────
       - name: Generate ERTMS skeleton
         run: |
           python generation.py
 
-      # ─────────────────────────────
-      # 5. Verificar estructura generada
-      # ─────────────────────────────
       - name: List generated files
         run: |
           ls -R skeleton
 
-      # ─────────────────────────────
-      # 6. Levantar arquitectura con Docker Compose
-      # ─────────────────────────────
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
       - name: Build and start services
         run: |
           cd skeleton
           docker compose up -d --build
 
-      # ─────────────────────────────
-      # 7. Esperar a que servicios estén listos
-      # ─────────────────────────────
       - name: Wait for services
         run: |
           echo "Waiting for services to be ready..."
-          sleep 25
+          sleep 30
 
-      # ─────────────────────────────
-      # 8. Verificar contenedores
-      # ─────────────────────────────
       - name: Check running containers
         run: docker ps -a
 
-      # ─────────────────────────────
-      # 9. Probar API Gateway
-      # ─────────────────────────────
       - name: Test API Gateway
         run: |
           curl -f http://localhost:8002/passengers/records || exit 1
 
-      # ─────────────────────────────
-      # 10. Probar Movement Authority Service
-      # ─────────────────────────────
       - name: Test Movement Authority Service
         run: |
           curl -f -X POST http://localhost:8002/authority \
             -H "Content-Type: application/json" \
             -d '{"train_id":"T-001","corridor":"CORRIDOR-A"}'
 
-      # ─────────────────────────────
-      # 11. Verificar MySQL
-      # ─────────────────────────────
-      - name: Install MySQL client
-        run: sudo apt-get update && sudo apt-get install -y mysql-client
-
-      - name: Check MySQL tables
+      - name: Check MySQL
         run: |
+          sudo apt-get update && sudo apt-get install -y mysql-client
           mysql -h 127.0.0.1 -u root -proot -e "SHOW DATABASES;"
 
-      # ─────────────────────────────
-      # 12. Logs (solo si falla)
-      # ─────────────────────────────
       - name: Show logs on failure
         if: failure()
         run: |
           cd skeleton
-          docker compose logs
+          docker compose logs || true
 
-      # ─────────────────────────────
-      # 13. Apagar contenedores
-      # ─────────────────────────────
       - name: Shutdown
         if: always()
         run: |
           cd skeleton
-          docker compose down
+          docker compose down || true
