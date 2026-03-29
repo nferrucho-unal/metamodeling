@@ -38,7 +38,7 @@ jobs:
 
       - name: Generate ERTMS skeleton
         run: |
-          python generation.py
+          python src/generation.py
 
       - name: List generated files
         run: |
