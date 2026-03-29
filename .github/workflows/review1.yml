@@ -1,0 +1,113 @@
+name: LSSA Lab2 CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      # ─────────────────────────────
+      # 1. Checkout código
+      # ─────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ─────────────────────────────
+      # 2. Setup Python
+      # ─────────────────────────────
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # ─────────────────────────────
+      # 3. Instalar dependencias
+      # ─────────────────────────────
+      - name: Install dependencies
+        run: |
+          pip install --no-cache-dir textX mysql-connector-python flask
+
+      # ─────────────────────────────
+      # 4. Generar skeleton
+      # ─────────────────────────────
+      - name: Generate ERTMS skeleton
+        run: |
+          python generation.py
+
+      # ─────────────────────────────
+      # 5. Verificar estructura generada
+      # ─────────────────────────────
+      - name: List generated files
+        run: |
+          ls -R skeleton
+
+      # ─────────────────────────────
+      # 6. Levantar arquitectura con Docker Compose
+      # ─────────────────────────────
+      - name: Build and start services
+        run: |
+          cd skeleton
+          docker compose up -d --build
+
+      # ─────────────────────────────
+      # 7. Esperar a que servicios estén listos
+      # ─────────────────────────────
+      - name: Wait for services
+        run: |
+          echo "Waiting for services to be ready..."
+          sleep 25
+
+      # ─────────────────────────────
+      # 8. Verificar contenedores
+      # ─────────────────────────────
+      - name: Check running containers
+        run: docker ps -a
+
+      # ─────────────────────────────
+      # 9. Probar API Gateway
+      # ─────────────────────────────
+      - name: Test API Gateway
+        run: |
+          curl -f http://localhost:8002/passengers/records || exit 1
+
+      # ─────────────────────────────
+      # 10. Probar Movement Authority Service
+      # ─────────────────────────────
+      - name: Test Movement Authority Service
+        run: |
+          curl -f -X POST http://localhost:8002/authority \
+            -H "Content-Type: application/json" \
+            -d '{"train_id":"T-001","corridor":"CORRIDOR-A"}'
+
+      # ─────────────────────────────
+      # 11. Verificar MySQL
+      # ─────────────────────────────
+      - name: Install MySQL client
+        run: sudo apt-get update && sudo apt-get install -y mysql-client
+
+      - name: Check MySQL tables
+        run: |
+          mysql -h 127.0.0.1 -u root -proot -e "SHOW DATABASES;"
+
+      # ─────────────────────────────
+      # 12. Logs (solo si falla)
+      # ─────────────────────────────
+      - name: Show logs on failure
+        if: failure()
+        run: |
+          cd skeleton
+          docker compose logs
+
+      # ─────────────────────────────
+      # 13. Apagar contenedores
+      # ─────────────────────────────
+      - name: Shutdown
+        if: always()
+        run: |
+          cd skeleton
+          docker compose down
