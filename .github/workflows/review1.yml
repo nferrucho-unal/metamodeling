@@ -74,13 +74,22 @@ jobs:
         run: |
           sudo apt-get update && sudo apt-get install -y mysql-client
           mysql -h 127.0.0.1 -u root -proot -e "SHOW DATABASES;"
-
+          
       - name: Show logs on failure
         if: failure()
+        continue-on-error: true
         run: |
-          cd skeleton
-          docker compose logs || true
-
+          echo "=== Attempting to gather logs ===" 
+          if [ -d "skeleton" ]; then
+            cd skeleton
+            echo "=== Docker containers ===" 
+            docker ps -a || true
+            echo "=== Docker Compose logs ===" 
+            docker compose logs || true
+          else
+            echo "skeleton directory not found"
+          fi
+          
       - name: Shutdown
         if: always()
         run: |
