@@ -1,0 +1,5 @@
+textX
+mysql-connector-python
+flask
+pytest
+pytest-cov
