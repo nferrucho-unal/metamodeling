@@ -1,0 +1,97 @@
+name: LSSA Lab2 CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+        options: >-
+          --health-cmd="mysqladmin ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=3
+        ports:
+          - 3306:3306
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install --no-cache-dir textX mysql-connector-python flask
+
+      - name: Generate ERTMS skeleton
+        run: |
+          python src/generation.py
+
+      - name: List generated files
+        run: |
+          ls -R skeleton
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Build and start services
+        run: |
+          cd skeleton
+          docker compose up -d --build
+
+      - name: Wait for services
+        run: |
+          echo "Waiting for services to be ready..."
+          sleep 30
+
+      - name: Check running containers
+        run: docker ps -a
+
+      - name: Test API Gateway
+        run: |
+          curl -f http://localhost:8002/passengers/records || exit 1
+
+      - name: Test Movement Authority Service
+        run: |
+          curl -f -X POST http://localhost:8002/authority \
+            -H "Content-Type: application/json" \
+            -d '{"train_id":"T-001","corridor":"CORRIDOR-A"}'
+
+      - name: Check MySQL
+        run: |
+          sudo apt-get update && sudo apt-get install -y mysql-client
+          mysql -h 127.0.0.1 -u root -proot -e "SHOW DATABASES;"
+          
+      - name: Show logs on failure
+        if: failure()
+        continue-on-error: true
+        run: |
+          echo "=== Attempting to gather logs ===" 
+          if [ -d "skeleton" ]; then
+            cd skeleton
+            echo "=== Docker containers ===" 
+            docker ps -a || true
+            echo "=== Docker Compose logs ===" 
+            docker compose logs || true
+          else
+            echo "skeleton directory not found"
+          fi
+          
+      - name: Shutdown
+        if: always()
+        run: |
+          cd skeleton
+          docker compose down || true
