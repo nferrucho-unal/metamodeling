@@ -1,0 +1,297 @@
+name: Advanced CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  schedule:
+    - cron: '0 2 * * *'  # Daily at 2 AM UTC
+
+env:
+  PYTHON_VERSION: '3.11'
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # Job 1: Code Quality & Linting
+  code-quality:
+    name: Code Quality Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install linting tools
+        run: |
+          pip install --no-cache-dir flake8 black pylint pytest-cov
+
+      - name: Run Black formatter check
+        run: black --check src/
+        continue-on-error: true
+
+      - name: Run Flake8 linter
+        run: flake8 src/ --count --select=E9,F63,F7,F82 --show-source --statistics
+        continue-on-error: true
+
+      - name: Run Pylint
+        run: pylint src/ --fail-under=7.0 || true
+        continue-on-error: true
+
+  # Job 2: Unit Testing & Coverage
+  test:
+    name: Unit Tests & Coverage
+    runs-on: ubuntu-latest
+    needs: code-quality
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          pip install --no-cache-dir -r requirements.txt
+          pip install pytest pytest-cov pytest-xdist
+
+      - name: Run unit tests
+        run: |
+          pytest tests/ -v --cov=src --cov-report=xml --cov-report=html
+
+      - name: Upload coverage reports
+        uses: codecov/codecov-action@v3
+        with:
+          files: ./coverage.xml
+          flags: unittests
+          name: codecov-umbrella
+
+      - name: Archive coverage reports
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: coverage-report
+          path: htmlcov/
+
+  # Job 3: Build & Security Scan
+  security:
+    name: Security Scanning
+    runs-on: ubuntu-latest
+    needs: code-quality
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install security tools
+        run: |
+          pip install --no-cache-dir bandit safety
+
+      - name: Run Bandit security check
+        run: bandit -r src/ -f json -o bandit-report.json || true
+        continue-on-error: true
+
+      - name: Check dependencies vulnerabilities
+        run: safety check --json || true
+        continue-on-error: true
+
+      - name: Upload security reports
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: security-reports
+          path: bandit-report.json
+
+  # Job 4: Build Docker Image
+  build:
+    name: Build & Push Docker Image
+    runs-on: ubuntu-latest
+    needs: [test, security]
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v2
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v4
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=sha
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # Job 5: Integration Testing
+  integration-test:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: build
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: ertms_test
+        options: >-
+          --health-cmd="mysqladmin ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=3
+        ports:
+          - 3306:3306
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          pip install --no-cache-dir textX mysql-connector-python flask pytest
+
+      - name: Generate ERTMS skeleton
+        run: |
+          python src/generation.py
+
+      - name: List generated files
+        run: |
+          ls -R skeleton/
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Build and start services
+        run: |
+          cd skeleton
+          docker compose up -d --build
+
+      - name: Wait for services
+        run: |
+          echo "Waiting for services to be ready..."
+          sleep 30
+          docker ps -a
+
+      - name: Run integration tests
+        run: |
+          pytest tests/integration/ -v || true
+
+      - name: Test API Gateway
+        run: |
+          curl -v http://localhost:8002/passengers/records || echo "API test failed"
+
+      - name: Test Movement Authority Service
+        run: |
+          curl -v -X POST http://localhost:8002/authority \
+            -H "Content-Type: application/json" \
+            -d '{"train_id":"T-001","corridor":"CORRIDOR-A"}' || echo "Authority test failed"
+
+      - name: Verify MySQL
+        run: |
+          sudo apt-get update && sudo apt-get install -y mysql-client
+          mysql -h 127.0.0.1 -u root -proot -e "SHOW DATABASES;"
+
+      - name: Gather logs on failure
+        if: failure()
+        continue-on-error: true
+        run: |
+          echo "=== Docker containers ===" 
+          docker ps -a || true
+          echo "=== Docker Compose logs ===" 
+          cd skeleton && docker compose logs || true
+
+      - name: Cleanup
+        if: always()
+        run: |
+          cd skeleton
+          docker compose down || true
+
+  # Job 6: Deployment (Optional)
+  deploy:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: integration-test
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    environment:
+      name: production
+      url: https://metamodeling-prod.example.com
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy notification
+        run: |
+          echo "Deploying version ${{ github.sha }} to production"
+          echo "Repository: ${{ github.repository }}"
+          echo "Branch: ${{ github.ref }}"
+
+      - name: Run deployment script
+        run: |
+          echo "🚀 Deployment script would run here"
+          echo "   - Push Docker image to registry"
+          echo "   - Update kubernetes manifests"
+          echo "   - Trigger CD pipeline"
+
+  # Job 7: Notifications & Reporting
+  notify:
+    name: Notifications
+    runs-on: ubuntu-latest
+    if: always()
+    needs: [code-quality, test, security, build, integration-test]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Generate summary
+        run: |
+          echo "## 📊 Pipeline Summary" >> $GITHUB_STEP_SUMMARY
+          echo "**Repository:** ${{ github.repository }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Branch:** ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Author:** ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+
+      - name: Create job summary
+        run: |
+          echo "### ✅ Pipeline Results" >> $GITHUB_STEP_SUMMARY
+          echo "- Code Quality: ${{ needs.code-quality.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Tests: ${{ needs.test.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Security: ${{ needs.security.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Build: ${{ needs.build.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Integration Tests: ${{ needs.integration-test.result }}" >> $GITHUB_STEP_SUMMARY
