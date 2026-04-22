@@ -64,10 +64,10 @@ jobs:
 
       - name: Run unit tests
         run: |
-          pytest tests/ -v --cov=src --cov-report=xml --cov-report=html
+          pytest ./tests/ -v --cov=src --cov-report=xml --cov-report=html
 
       - name: Upload coverage reports
-        uses: codecov/codecov-action@v3
+        uses: codecov/codecov-action@v4
         with:
           files: ./coverage.xml
           flags: unittests
@@ -75,7 +75,7 @@ jobs:
 
       - name: Archive coverage reports
         if: always()
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: coverage-report
           path: htmlcov/
@@ -107,7 +107,7 @@ jobs:
         continue-on-error: true
 
       - name: Upload security reports
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         if: always()
         with:
           name: security-reports
@@ -172,7 +172,7 @@ jobs:
           --health-timeout=5s
           --health-retries=3
         ports:
-          - 3306:3306
+          - 3308:3306
 
     steps:
       - name: Checkout code
